@@ -1,0 +1,61 @@
+; inifile to bridge
+; This should make the Teensy stream
+; the mission relevant values
+; at a reasonable rate.
+;
+; enable teensy connection 0 (/dev/ttyACM0) only
+bridge teensy 0 1
+bridge teensy 1 0
+;
+; subscription syntax is
+; regbot sub MMM interval
+; where 'regbot' is the destination, regbot is the main board (also used by the Regbot)
+;       'sub' is keyword for subscription
+;       'MMM' is the message keyword (e.g. pose)
+;       'interval' is the desired interval between messages in ms
+regbot sub pose 30
+regbot sub gyro 21
+regbot sub conf 801
+regbot sub hbt 601
+regbot sub mot 123
+regbot sub id 2001
+regbot sub ver 2003
+regbot sub joy 10
+; log flags
+; regbot sub lfc 1507
+; regbot sub lfl 1509
+; regbot sub lst 1511
+; 
+;
+;regbot sub 
+; 
+; max values for RC control (Logitec gamepad on Raspberry only)
+; velocity (m/sec), turn-rate deg/sec and slow factor (0.2'ish)
+; not valid for the green gamepad
+gamepad rcmax 2.0 45 0.2
+; Make a joy-button start a program (just 1)
+gamepad spgm 1 bash /home/local/start_mission.sh
+; redirect joy message to joy module in bridge
+regbot:joy subscribe -1 gamepad
+;
+; the messages in the bridge can med logged
+; syntax: regbot:pose logopen
+; where 'regbot' is the source of the message
+;        ':pose' is the keyword from that source preceded by a ':'
+;        'logopen' (or logclose) openns or closes the logfile.
+;        the file will be placed in a subdirectory called 
+;        log_YYYYMMDD_HHMMSS.sss and the file  source_keyword.txt
+; regbot:pose logopen
+; regbot:mis logopen
+; regbot:gyro logopen
+; regbot:# logopen
+; regbot:gyro logopen
+; send RC to both front and regbot
+gamepad:rc subscribe -1 regbot
+; command-line options
+; if bridge is run from the command line
+regbot:# subscribe -1 console
+#
+# publish pose to ROS
+; if source is a regbot
+regbot:pose subscribe -1 ros

@@ -1,0 +1,136 @@
+/*  
+ * 
+ * Copyright © 2023 DTU,
+ * Author:
+ * Christian Andersen jcan@dtu.dk
+ * 
+ * The MIT License (MIT)  https://mit-license.org/
+ * 
+ * Permission is hereby granted, free of charge, to any person obtaining a copy of this software
+ * and associated documentation files (the “Software”), to deal in the Software without restriction, 
+ * including without limitation the rights to use, copy, modify, merge, publish, distribute, 
+ * sublicense, and/or sell copies of the Software, and to permit persons to whom the Software 
+ * is furnished to do so, subject to the following conditions:
+ * 
+ * The above copyright notice and this permission notice shall be included in all copies 
+ * or substantial portions of the Software.
+ * 
+ * THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, 
+ * INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR 
+ * PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE 
+ * FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, 
+ * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN 
+ * THE SOFTWARE. */
+
+#include <string>
+#include <string.h>
+#include <math.h>
+#include "mpose.h"
+#include "steensy.h"
+#include "uservice.h"
+#include "sencoder.h"
+#include "utime.h"
+#include "cmotor.h"
+#include "cservo.h"
+#include "medge.h"
+#include "bplan1.h"
+#include "cmixer.h"
+
+// create value
+BPlan1 plan1;
+
+
+// Bridge class:
+void BPlan1::setup()
+{ // ensure there is default values in ini-file
+  if (not ini.has("plan1"))
+  { // no data yet, so generate some default values
+    ini["plan1"]["log"] = "true";
+    ini["plan1"]["run"] = "true";
+
+  }
+  // get values from ini-file
+  toConsole = ini["plan20"]["print"] == "true";
+  //
+  if (ini["plan1"]["log"] == "true")
+  { // open logfile
+    std::string fn = service.logPath + "log_plan1.txt";
+    logfile = fopen(fn.c_str(), "w");
+    fprintf(logfile, "%% Mission plan1 logfile\n");
+    fprintf(logfile, "%% 1 \tTime (sec)\n");
+    fprintf(logfile, "%% 2 \tInteger or float (for Matlab to plot\n");
+    fprintf(logfile, "%% 3 \t%% Mission status (mostly for debug)\n");
+  }
+  setupDone = true;
+}
+
+BPlan1::~BPlan1()
+{
+  terminate();
+}
+
+void BPlan1::terminate()
+{ // wait for thread to finish
+  if (logfile != nullptr)
+    fclose(logfile);
+}
+
+void BPlan1::toLog(const char* message)
+{
+  UTime t("now");
+  if (logfile != nullptr)
+  {
+    fprintf(logfile, "%lu.%04ld %d %% %s\n", t.getSec(), t.getMicrosec()/100,
+            logCnt,
+            message);
+  }
+  if (toConsole)
+  {
+    printf("%lu.%04ld %d %% %s\n", t.getSec(), t.getMicrosec()/100,
+           logCnt,
+            message);
+  }
+  logCnt++;
+}
+
+
+void BPlan1::run()
+{
+  if (not setupDone) setup();
+  //
+  toLog("Plan1 started");
+  /**
+    * Velocity control input
+    * \param linearVelocity in meter per second
+    * \param turnVelocity   in radians per second
+    * void setVelocity(float linearVelocity, float turnVelocity);
+    */
+  /**
+    * Set one servo position
+    * \param servo is the servo number 1,2,3,4 or 5
+    * \param enabled 1=enabled, 0=disabled (vorks on SAVOX servos only)
+    * \param position is servo position from -500 to +500
+    * \param velocity is number of servo units per second (0, 1..1000) (0 = as fast as possible)
+    *  servo.setServo(1, 1, 300, 200);
+    * */
+  toLog("Forward 0.3 m/s start");
+  mixer.setVelocity(0.7);
+  usleep(600000);
+  //
+  toLog("reverse 0.3m/s and turning +1 rad/s (CCV)");
+  mixer.setTurnrate(3.14);
+  usleep(500000);
+  //
+  toLog("Servo 1 to -600 (500 units/sec) and vel=0");
+  servo.setServo(1, 1, -600, 500);
+  mixer.setVelocity(0.5, 0.0); // but continue turning
+  sleep(1);
+  //
+  toLog("Servo 1 disable and stop");
+  servo.setServo(1, 0);
+  mixer.setVelocity(0.0, 0.0);
+  sleep(1);
+  toLog("Plan1 finished");
+}
+
+

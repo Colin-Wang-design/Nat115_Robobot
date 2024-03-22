@@ -1,0 +1,213 @@
+#!/usr/bin/python
+# -*- coding: utf-8 -*-
+
+#/***************************************************************************
+ #*   Copyright (C) 2014-2023 by DTU
+ #*   jca@elektro.dtu.dk            
+ #* 
+ #* 
+ #* The MIT License (MIT)  https://mit-license.org/
+ #* 
+ #* Permission is hereby granted, free of charge, to any person obtaining a copy of this software
+ #* and associated documentation files (the “Software”), to deal in the Software without restriction, 
+ #* including without limitation the rights to use, copy, modify, merge, publish, distribute, 
+ #* sublicense, and/or sell copies of the Software, and to permit persons to whom the Software 
+ #* is furnished to do so, subject to the following conditions:
+ #* 
+ #* The above copyright notice and this permission notice shall be included in all copies 
+ #* or substantial portions of the Software.
+ #* 
+ #* THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, 
+ #* INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR 
+ #* PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE 
+ #* FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, 
+ #* ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN 
+ #* THE SOFTWARE. */
+
+
+import sys 
+import os
+import threading
+import numpy as np
+import serial
+import time
+import timeit
+# local files
+from ustate import state
+from datetime import datetime
+
+
+
+class UTeensy():
+  # USB thread
+  threadRunning = False
+  stopThread = False
+  thread = []
+  usbDev = ''
+  dev = serial.Serial()
+  sendLock = threading.Lock()
+  dataTxCnt = 0
+  timeLastCnt = 95;
+  notSendCnt = 0;
+  closingUSB = False
+
+  def setup(self, teensyDevice):
+    self.usbDev = teensyDevice
+    self.close();
+    self.thread = threading.Thread(target=self.run, name="Teensy_reader")
+    self.thread.start()
+    
+  def isOpen(self):
+    if self.closingUSB:
+      return False
+    try:
+      return self.dev.isOpen()
+    except:
+      return False
+  
+  # open USB to Teensy
+  def usbopen(self, name):
+    if (not self.isOpen()):
+      self.dev.port = str(name)
+      self.dev.timeout = 0.5
+      print("# UTeensy::usbopen:: Trying to open:" + str(name))
+      try:
+        self.dev.open()
+      except:
+        print("# UTeensy::usbopen:: open with error:" + str(name))
+        self.close()
+    if self.isOpen():
+      #self.dev.flushInput()
+      self.dev.flushOutput()
+      print('# Teensy connection open to ' + self.usbDev)
+      # subscribe to heartbeat messages (state and battery voltage)
+      self.send("confirm 0\n")
+      self.send("sub hbt 400\n")
+    pass
+
+  def close(self):
+    # USB close
+    #print("# closing USB\n")
+    if self.isOpen():
+      #print("stopping push S=0")
+      self.send("leave\n")
+      self.dev.close()
+      print("# Teensy connection closed")
+    pass
+
+  # always an active read on Teensy connection
+  def run(self):
+    from uservice import service
+    count = 0
+    m = 0
+    n = 0
+    self.threadRunning = True
+    print("# Teensy thread running")
+    got = ""
+    gotraw = []
+    msgTime = None
+    self.usbopen(self.usbDev);
+    state.teensyOpenTime = datetime.now()
+    while not (self.stopThread or self.closingUSB):
+      if self.isOpen():
+        n = 0
+        try:
+          # get characters until new-line (\n)
+          gotraw = self.dev.readline()
+          msgTime = datetime.now()
+          n = len(gotraw)
+          #print("# got message")
+          m = 0
+        except:
+          m = m + 1
+          time.sleep(0.01)
+          print("# Read from Teensy failed " + str(m) + " times")
+          if m > 5:
+            self.closingUSB = True
+        if n > 3:
+          ok = True
+          #for c in gotraw:
+            #ok = ok and c < 127
+          try:
+            got = gotraw.decode('ascii')
+          except:
+            ok = False;
+          if ok:
+            #self.dataRxCnt += 1
+            # look for CRC
+            source = ""
+            if got[0] == ';':
+              sum = 0
+              q = -1
+              try:
+                q = int(got[1:3])
+                if q > 0:
+                  for i in range(3,len(gotraw)):
+                    if gotraw[i] >= ord(' '):
+                      sum = sum + gotraw[i]
+                ok = (sum % 99) +1 == q
+              except:
+                ok = False
+              if ok:
+                # test for source
+                got = got[3:]
+                srcidx = got.find(":",0,32)
+                spaceidx = got.find(" ",0,32)
+                if srcidx >= 0 and (spaceidx < 0 or spaceidx > srcidx):
+                  # there is a source
+                  source = got[:srcidx]
+                  got = got[srcidx+1:]
+                  # print("# found source " + source + " at index=" + str(srcidx) + ", the rest is '" + got + "'")
+              if not ok:
+                print("Teensy data failed crc-test (crc=" + str(q) + ",sum="+ str(sum) + ", %99+1=" + str((sum %99) + 1) + ") :" + got)
+              else:
+                # decode message
+                service.decode(got, msgTime)
+                #self.main.decodeCommand(got, len(got), "u", source)
+                print('### should decode here ' + source)
+            else:
+              print("Teensy msg do not start with ; discarded:" + got)
+          else:
+            print("# code has illegal chars " + str(gotraw))
+        #time.sleep(0.01)
+      else:
+        time.sleep(1.0)
+        print("# USB connection to Teensy is not open")
+    print("# USB read thread ended")
+    self.threadRunning = False
+
+  def terminate(self):
+    self.close()
+    if self.threadRunning:
+      self.stopThread = True
+      self.thread.join(2)
+      print("# Teensy thread joined")
+
+  ### send string to USB connection
+  def send(self, s):
+    self.sendLock.acquire()
+    if self.isOpen():
+      n = len(s)
+      sum = 0
+      sumCnt = 0
+      for i in range(0,n):
+        if s[i] >= ' ':
+          sum += ord(s[i])
+          sumCnt += 1
+      #print("# to USB: CRC=" + str((sum % 99) + 1) + " for " + str(sumCnt) + "chars, sum=" + str(sum) + ", " + s + "'")
+      ss = ";{:02d}".format((sum % 99) + 1) + s
+      if (n > 0):
+        try:
+          n = self.dev.write(ss.encode())
+          #print("# USB write returned " + str(n) + " bytes send")
+          if (n == 0):
+             raise Exception("Write error")
+        except:
+          self.closingUSB = True;
+          print("# UTeensy::usbWrite(s) failed - closing connection")
+    self.sendLock.release()
+    return self.isOpen()
+
+
+# create object
+teensy = UTeensy()

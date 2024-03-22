@@ -1,0 +1,336 @@
+/* #***************************************************************************
+ #*   Copyright (C) 2023 by DTU
+ #*   jcan@dtu.dk
+ #*
+ #*
+ #* The MIT License (MIT)  https://mit-license.org/
+ #*
+ #* Permission is hereby granted, free of charge, to any person obtaining a copy of this software
+ #* and associated documentation files (the “Software”), to deal in the Software without restriction,
+ #* including without limitation the rights to use, copy, modify, merge, publish, distribute,
+ #* sublicense, and/or sell copies of the Software, and to permit persons to whom the Software
+ #* is furnished to do so, subject to the following conditions:
+ #*
+ #* The above copyright notice and this permission notice shall be included in all copies
+ #* or substantial portions of the Software.
+ #*
+ #* THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+ #* INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR
+ #* PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE
+ #* FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ #* ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ #* THE SOFTWARE. */
+
+
+#include <stdio.h>
+#include <signal.h>
+#include "CLI/CLI.hpp"
+#include <filesystem>
+
+#include "uservice.h"
+#include "steensy.h"
+#include "sencoder.h"
+#include "mpose.h"
+#include "sstate.h"
+#include "uini.h"
+#include "cmotor.h"
+#include "cturnrate.h"
+#include "cmixer.h"
+#include "cservo.h"
+#include "cedge.h"
+#include "spyvision.h"
+#include "sdist.h"
+#include "simu.h"
+#include "sedge.h"
+#include "medge.h"
+#include "sjoylogitech.h"
+#include "sgpiod.h"
+
+#define REV "$Id$"
+// define the service class
+UService service;
+// make a configuration structure
+mINI::INIStructure ini;
+
+void signal_callback_handler(int signum)
+{ // called when pressing ctrl-C
+  cout << "Caught signal " << signum << endl;
+  service.terminate();
+  exit(signum);
+}
+
+bool UService::setup(int argc,char **argv)
+{ // Interrupt signal handler for most common signals
+  signal(SIGINT, signal_callback_handler); // 2 normal ctrl-C
+//   signal(SIGKILL, signal_callback_handler); // 9
+  signal(SIGQUIT, signal_callback_handler); // 3
+  signal(SIGHUP, signal_callback_handler); // 1
+  signal(SIGPWR, signal_callback_handler); // 30
+  signal(SIGTERM, signal_callback_handler); // 15 (pkill default)
+  //
+  CLI::App cli{"ROBOBOT app"};
+  // cli.add_option("-d,--device", service.usbDev, "USB device name for Teensy (default is /dev/ttyACM0)");
+  // add reply to version request
+  bool version{false};
+  cli.add_flag("-v,--version", version, "Latest SVN version (for uservice.cpp)");
+  bool api_list{false};
+  cli.add_flag("-a,--api-list", api_list, "List available modules");
+  cli.add_flag("-d,--daemon", asDaemon, "Do not listen to keyboard (daemon mode)");
+  cli.allow_windows_style_options();
+  CLI11_PARSE(cli, argc, argv);
+  bool theEnd = false;
+  //
+  if (version)
+  {
+    printf("RAUBASE SVN service version%s\n", getVersionString().c_str());
+    theEnd = true;
+  }
+  if (api_list)
+  {
+    printf("Available API modules:\n");
+    printf("-- Sensor\n");
+    printf("\tsedge    Line sensor raw data\n");
+    printf("\tencoder  Encoder status\n");
+    printf("\tgpio     Raspberry Pi GPIO pin access\n");
+    printf("\timu      Gyro/accelerometer (MPU9250)\n");
+    printf("\tdist     Distance sensor (sharp 2Y0A21 or ultrasound URM09)\n");
+    printf("\tstate    State of Teensy (e.g. battery voltage)\n");
+    printf("-- Modeling (qualified data)\n");
+    printf("\tpose     Calculated odometry pose (from encoder values)\n");
+    printf("\tmedge    Line edge position detect\n");
+    printf("-- Plan modules\n");
+    printf("\tplanXX   Actual drive mission modules\n");
+    printf("-- Control modules\n");
+    printf("\tmixer    Convertion from forward- and rotational velocity to left-right velocity\n");
+    printf("\tturnrate Control of turnrate using a PID controller\n");
+    printf("\tmotor    Control of wheel velocity using a PID controller\n");
+    printf("\tcedge    Control of follow line edge (to turnrate)\n");
+    printf("-- Actuaror\n");
+    printf("\tmotor    Motor velocity control\n");
+    printf("\tturnrate Turnrate control\n");
+    printf("\tservo    Servo control\n");
+    printf("-- Interface\n");
+    printf("\tpyvision Interface to some Python function (socket interface)\n");
+    printf("\tteensy1  Communication withe Teensy\n");
+    theEnd = true;
+  }
+  if (not theEnd)
+  {
+    // create an ini-file structure
+    iniFile = new mINI::INIFile(iniFileName);
+    // and read the file (if any, else just create the 'ini' structure)
+    iniFile->read(ini);
+    // initialize all elements
+    if (not ini.has("service"))
+    { // no data yet, so generate some default values
+      ini["service"]["logpath"] = "log/";
+    }
+    logPath = ini["service"]["logpath"];
+    int n = logPath.find("%d");
+    if (n > 0)
+    { // date should be added to path
+      UTime t("now");
+      std::string dpart = t.getForFilename();
+      logPath.replace(n, 2, dpart);
+    }
+    std::error_code e;
+    bool ok = filesystem::create_directory(logPath, e);
+    if (ok)
+      printf("# UService:: created directory %s\n", logPath.c_str());
+    else
+    { // failed (probably: path exist already)
+      // std::perror("#*** UService:: Failed to create log path:");
+    }
+    // open the main data source
+    teensy1.setup();
+    // setup and initialize all modules
+    encoder.setup();
+    state.setup();
+    pose.setup();
+    gpio.setup();
+    imu.setup();
+    sedge.setup();
+    medge.setup();
+    cedge.setup();
+    mixer.setup();
+    motor.setup();
+    turnrate.setup();
+    pyvision.setup();
+    servo.setup();
+        dist.setup();
+    joyLogi.setup();
+    setupComplete = true;
+    usleep(2000);
+    //
+    // wait for all settings to be accepted
+    if (teensy1.teensyConnectionOpen)
+    {
+      UTime t("now");
+      while (teensy1.getTeensyCommQueueSize() > 0 and t.getTimePassed() < 10.0)
+        usleep(10000);
+      printf("# UService::setup - waited %g sec for Teensy communication to start\n", t.getTimePassed());
+      // decide if all setup is OK
+      int retry = 0;
+      int dumped = teensy1.getTeensyCommError(retry);
+      if (dumped > 0 or retry > 0)
+      {
+        printf("# UService:: ************************************************************\n");
+        printf("# UService:: Teensy setup communication error: retry=%d, dumped=%d\n", retry, dumped);
+        printf("# UService:: ************************************************************\n");
+      }
+      else
+        printf("# UService:: setup of all modules finished OK.\n");
+      theEnd = dumped > 0 or teensy1.getTeensyCommQueueSize() > 0;
+    }
+    else
+    {
+      printf("# UService:: setup failed, no connection to Teensy - terminating.\n");
+      theEnd = true;
+    }
+  }
+  if (not theEnd)
+  { // start listen to the keyboard
+    th1 = new std::thread(runObj, this);
+    th2 = new std::thread(runObj2, this);
+  }
+  return not theEnd;
+}
+
+bool UService::decode(const char* msg, UTime& msgTime)
+{ // decode messages from Teensy
+  bool used = true;
+  if      (state.decode(msg, msgTime)) {}
+  else if (encoder.decode(msg, msgTime)) {}
+  else if (imu.decode(msg, msgTime)) {}
+  else if (servo.decode(msg, msgTime)) {}
+  else if (sedge.decode(msg, msgTime)) {}
+  else if (dist.decode(msg, msgTime)) {}
+  //
+  // add other Teensy data users here
+  //
+  else
+    used = false;
+  return used;
+}
+
+void UService::stopNow(const char * who)
+{ // request a terminate and exit
+  printf("# UService:: %s say stop now\n", who);
+  stopNowRequest = true;
+}
+
+
+void UService::terminate()
+{ // Terminate modules (especially threads and log files)
+  if (terminating or not setupComplete)
+    return;
+  printf("# --------- terminating -----------\n");
+  terminating = true;
+  stop = true; // stop all threads, when finished current activity
+  //
+  sleep(2);
+  usleep(100000);
+  printf("# UService: now calling terminate of modules\n");
+  //
+  joyLogi.terminate();
+  sleep(2);
+  printf("# UService terminate pre joy\n");
+  encoder.terminate();
+  sleep(2);
+  printf("# UService terminate pre pose\n");
+  pose.terminate();
+  sleep(2);
+  printf("# UService terminate pre imu\n");
+  imu.terminate();
+  sleep(1);
+  printf("# UService terminate pre gpio\n");
+  gpio.terminate();
+  sleep(1);
+  printf("# UService terminate pre cedge\n");
+  cedge.terminate();
+  sleep(1);
+  printf("# UService terminate pre medge\n");
+  medge.terminate();
+  sleep(1);
+  printf("# UService terminate pre sedge\n");
+  sedge.terminate();
+  sleep(1);
+  printf("# UService terminate pre mixer\n");
+  mixer.terminate();
+  sleep(1);
+  printf("# UService terminate pre motor\n");
+  motor.terminate();
+  sleep(1);
+  printf("# UService terminate pre turnrate\n");
+  turnrate.terminate();
+  printf("# UService terminate pre state\n");
+  state.terminate();
+  printf("# UService terminate pre servo\n");
+  servo.terminate();
+    dist.terminate();
+  // terminate sensors before Teensy
+  teensy1.terminate();
+  pyvision.terminate();
+  // service must be the last to close
+  if (not ini.has("ini"))
+  {
+    ini["ini"]["; set 'saveConfig' to 'false' to avoid autosave"] = "";
+    ini["ini"]["saveConfig"] = "true";
+  }
+  std::string& shouldSave = ini["ini"]["saveConfig"];
+  if (shouldSave != "false")
+  { // write any changes ini-file values (and structures)
+    ini["ini"]["version"] = getVersionString();
+    iniFile->write(ini, true);
+    printf("# UService:: configuration saved to %s\n", iniFileName.c_str());
+  }
+}
+
+std::string UService::getVersionString()
+{
+  // #define REV "$Id$"
+  std::string ver = REV;
+  int n1 = ver.find(' ', 10);
+  int n2 = ver.rfind("Z ");
+  std::string part = ver.substr(n1, n2-n1);
+  return part;
+}
+
+void UService::run()
+{
+  gotKeyInput = false;
+  while (not stop)
+  {
+    if (not asDaemon)
+    {
+      cin >> keyString;
+      if (keyString == "stop")
+        signal_callback_handler(-1);
+      else
+        gotKeyInput = true;
+    }
+  }
+}
+
+void UService::run2()
+{
+  while (not stop)
+  { // e.g. using the stop switch
+    if (stopNowRequest)
+    {
+      signal_callback_handler(-1);
+    }
+    usleep(50000);
+  }
+}
+
+bool UService::gotKey()
+{
+  if (gotKeyInput)
+  { // reset flag
+    gotKeyInput = false;
+    return true;
+  }
+  else
+    return false;
+}

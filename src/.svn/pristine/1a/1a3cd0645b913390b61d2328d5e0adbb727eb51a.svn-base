@@ -1,0 +1,16 @@
+#!/usr/bin/python3
+
+import argparse
+from uservice import service
+
+# too much work to do this part,
+# so discontinued
+
+if __name__ == "__main__":
+    isHelp = service.setup()
+    if isHelp:
+        print('Finished')
+    else:
+        print('Doing stuff')
+        pass
+

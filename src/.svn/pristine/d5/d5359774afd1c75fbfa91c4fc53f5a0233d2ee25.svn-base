@@ -1,0 +1,137 @@
+/*  
+ * 
+ * Copyright © 2023 DTU,
+ * Author:
+ * Christian Andersen jcan@dtu.dk
+ * 
+ * The MIT License (MIT)  https://mit-license.org/
+ * 
+ * Permission is hereby granted, free of charge, to any person obtaining a copy of this software
+ * and associated documentation files (the “Software”), to deal in the Software without restriction, 
+ * including without limitation the rights to use, copy, modify, merge, publish, distribute, 
+ * sublicense, and/or sell copies of the Software, and to permit persons to whom the Software 
+ * is furnished to do so, subject to the following conditions:
+ * 
+ * The above copyright notice and this permission notice shall be included in all copies 
+ * or substantial portions of the Software.
+ * 
+ * THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, 
+ * INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR 
+ * PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE 
+ * FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, 
+ * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN 
+ * THE SOFTWARE. */
+
+#include <string>
+#include <string.h>
+#include <math.h>
+#include "mpose.h"
+#include "steensy.h"
+#include "uservice.h"
+#include "sencoder.h"
+#include "utime.h"
+#include "cmotor.h"
+#include "cservo.h"
+#include "medge.h"
+#include "bplan99.h"
+#include "cmixer.h"
+#include "sjoylogitech.h"
+
+// create value
+BPlan99 plan99;
+
+
+// Bridge class:
+void BPlan99::setup()
+{ // ensure there is default values in ini-file
+  if (not ini.has("plan1"))
+  { // no data yet, so generate some default values
+    ini["plan99"]["log"] = "true";
+    ini["plan99"]["run"] = "false";
+    ini["plan99"]["print"] = "true";
+  }
+  // get values from ini-file
+  toConsole = ini["plan99"]["print"] == "true";
+  //
+  if (ini["plan99"]["log"] == "true")
+  { // open logfile
+    std::string fn = service.logPath + "log_plan99.txt";
+    logfile = fopen(fn.c_str(), "w");
+    fprintf(logfile, "%% Mission plan99 logfile\n");
+    fprintf(logfile, "%% 1 \tTime (sec)\n");
+    fprintf(logfile, "%% 2 \tInteger or float (for Matlab to plot\n");
+    fprintf(logfile, "%% 3 \t%% Mission status (mostly for debug)\n");
+  }
+  setupDone = true;
+}
+
+BPlan99::~BPlan99()
+{
+  terminate();
+}
+
+void BPlan99::terminate()
+{ // wait for thread to finish
+  if (logfile != nullptr)
+  {
+    fclose(logfile);
+    logfile = nullptr;
+  }
+}
+
+void BPlan99::toLog(const char* message)
+{
+  UTime t("now");
+  if (logfile != nullptr)
+  {
+    fprintf(logfile, "%lu.%04ld %d %% %s\n", t.getSec(), t.getMicrosec()/100,
+            logCnt,
+            message);
+    fflush(logfile);
+  }
+  if (toConsole)
+  {
+    printf("%lu.%04ld %d %% %s\n", t.getSec(), t.getMicrosec()/100,
+           logCnt,
+            message);
+  }
+  logCnt++;
+}
+
+
+void BPlan99::run()
+{
+  if (not setupDone) setup();
+  //
+  toLog("Plan99 started");
+  /**
+    * Velocity control input
+    * \param linearVelocity in meter per second
+    * \param turnVelocity   in radians per second
+    * void setVelocity(float linearVelocity, float turnVelocity);
+    */
+  /**
+    * Set one servo position
+    * \param servo is the servo number 1,2,3,4 or 5
+    * \param enabled 1=enabled, 0=disabled (vorks on SAVOX servos only)
+    * \param position is servo position from -500 to +500
+    * \param velocity is number of servo units per second (0, 1..1000) (0 = as fast as possible)
+    *  servo.setServo(1, 1, 300, 200);
+    * */
+  if (joyLogi.joyRunning)
+  { // switch to manual control - to manually help the robot back
+    mixer.setManualOverride(true);
+    int sleepCnt = 0;
+    while (not mixer.autonomous() and sleepCnt < 60)
+    { // stop after a minute - else log-files will just grow
+//       toLog("in manual control");
+      sleep(1);
+      sleepCnt++;
+    }
+  }
+  else
+    toLog("# no joystick found");
+  toLog("Plan99 finished");
+}
+
+

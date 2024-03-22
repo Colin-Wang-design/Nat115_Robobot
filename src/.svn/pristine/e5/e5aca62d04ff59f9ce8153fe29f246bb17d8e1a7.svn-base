@@ -1,0 +1,103 @@
+% plot of x-section for fejemis
+close all
+clear
+%%  1    time 0.000 sec, from Sofia (2)
+%  1    time 0.001 sec, from Birte (60)
+%  2  3  4  5   (mission 0), state 2, entered (thread 3, line 0), events 0x0 (bit-flags)
+%  6  7 Motor velocity ref left, right: 1.2000 1.2000
+%  8  9 Motor voltage [V] left, right: 1.20 1.20
+% 10 11 Motor current left, right [A]: 0.018 -0.017
+% 12 13 Wheel velocity [m/s] left, right: 0.0000 0.0000
+% 14    Battery voltage [V]
+data01=load('motor_01.txt');
+data02=load('motor_02.txt');
+data03=load('motor_03.txt');
+data04=load('motor_04.txt');
+data05=load('motor_05.txt');
+data06=load('motor_06.txt');
+data07=load('motor_07.txt');
+data08=load('motor_08.txt');
+data09=load('motor_09.txt');
+data10=load('motor_10.txt');
+data11=load('motor_11.txt');
+data14=load('motor_14.txt');
+data16=load('motor_16.txt');
+data17=load('motor_17.txt');
+data18=load('motor_18.txt');
+data19=load('motor_19.txt');
+data20=load('motor_20.txt');
+data21=load('motor_21.txt');
+data22=load('motor_22.txt');
+data23=load('motor_23.txt');
+data24=load('motor_24.txt');
+data25=load('motor_25.txt');
+data26=load('motor_26.txt');
+data28=load('motor_28.txt');
+data29=load('motor_29.txt');
+data30=load('motor_30.txt');
+data31=load('motor_31.txt');
+data32=load('motor_32.txt');
+data33=load('motor_33.txt');
+data34=load('motor_34.txt');
+data34b=load('motor_34b.txt');
+data36=load('motor_36.txt');
+data37=load('motor_37.txt');
+data38=load('motor_38.txt');
+data39=load('motor_39.txt');
+data40=load('motor_40.txt');
+data41=load('motor_41.txt');
+data42=load('motor_42.txt');
+data43=load('motor_43.txt');
+data44=load('motor_44.txt');
+data45=load('motor_45.txt');
+data46=load('motor_46.txt');
+data47=load('motor_47.txt');
+data48=load('motor_48.txt');
+data49=load('motor_49.txt');
+data50=load('motor_50.txt');
+data51=load('motor_51.txt');
+data70=load('motor_70.txt');
+data70b=load('motor_70b.txt'); % 36GP-555 motorDynamics
+data70c=load('motor_70c.txt');
+data70d=load('motor_70d.txt');
+data70e=load('motor_70e.txt');
+data70f=load('motor_70f.txt');
+data71=load('motor_71.txt'); % med load 18 Ohm
+data71b=load('motor_71b.txt'); % med load 9 Ohm
+data71c=load('motor_71c.txt'); % med load 4.5 Ohm
+data71d=load('motor_71d.txt'); % med load 4.5 Ohm 0.63Nm
+data71e=load('motor_71d.txt'); % med load 1.68 , 2.6A, 0.8Nm
+data71f=load('motor_71f.txt'); % med load 1.12 Ohm  - overload
+%% jjjj
+dd = data34b;
+fig = 341
+%%
+figure(1000+fig)
+hold off
+time = dd(:,1) - dd(1,1);
+plot(time, dd(:,6)/10)
+hold on
+plot(time, dd(:,12))
+plot(time, dd(:,13))
+plot(time, dd(:,10))
+legend('motor voltage/10','velocity motor','velocity generator', 'Current (A)')
+title('Motortest w load')
+grid on
+%%
+figure(1001+fig)
+hold off
+plot(dd(:,1), dd(:,9))
+hold on
+plot(dd(:,1), dd(:,10))
+plot(dd(:,1), dd(:,11))
+legend('x','y','z')
+title('square gyro')
+grid on
+%%
+figure(1002+fig)
+hold off
+plot(dd(:,20), dd(:,21))
+axis equal
+legend('pose')
+title('square pose')
+grid on

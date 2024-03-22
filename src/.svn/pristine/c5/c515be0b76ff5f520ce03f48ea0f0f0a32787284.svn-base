@@ -1,0 +1,4 @@
+#!/bin/bash
+echo "Starting the mission"
+cd /home/local/mission/build
+./mission &

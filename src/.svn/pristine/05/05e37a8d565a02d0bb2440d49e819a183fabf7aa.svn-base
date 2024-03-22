@@ -1,0 +1,253 @@
+/*  
+ * 
+ * Copyright © 2023 DTU,
+ * Author:
+ * Christian Andersen jcan@dtu.dk
+ * 
+ * The MIT License (MIT)  https://mit-license.org/
+ * 
+ * Permission is hereby granted, free of charge, to any person obtaining a copy of this software
+ * and associated documentation files (the “Software”), to deal in the Software without restriction, 
+ * including without limitation the rights to use, copy, modify, merge, publish, distribute, 
+ * sublicense, and/or sell copies of the Software, and to permit persons to whom the Software 
+ * is furnished to do so, subject to the following conditions:
+ * 
+ * The above copyright notice and this permission notice shall be included in all copies 
+ * or substantial portions of the Software.
+ * 
+ * THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, 
+ * INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR 
+ * PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE 
+ * FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, 
+ * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN 
+ * THE SOFTWARE. */
+
+#include <string>
+#include <string.h>
+#include <thread>
+#include <math.h>
+#include "sencoder.h"
+#include "medge.h"
+#include "sencoder.h"
+#include "steensy.h"
+#include "uservice.h"
+
+// create value
+MEdge medge;
+
+
+// Bridge class:
+void MEdge::setup()
+{ // ensure there is default values in ini-file
+  if (not ini.has("edge") or not ini["edge"].has("calibWhite"))
+  { // no data yet, so generate some default values
+    ini["edge"]["calibWhite"] = "1000 1000 1000 1000 1000 1000 1000 1000"; // A/D value
+    ini["edge"]["calibBlack"] = "0 0 0 0 0 0 0 0"; // A/D value
+    ini["edge"]["whiteThresholdPct"] = "70"; // %
+    ini["edge"]["crossingLevelPct"] = "70"; // %
+    ini["edge"]["sensorWidth"] = "0.09"; // m
+    ini["edge"]["log"] = "true"; // log edge detection items
+  }
+  // get values from ini-file
+  const char * p1 = ini["edge"]["calibWhite"].c_str();
+  // white calibration value
+  for (int i = 0; i < 8; i++)
+    calibWhite[i] = strtol(p1, (char**)&p1,10);
+  // black calibration value
+  p1 = ini["edge"]["calibBlack"].c_str();
+  for (int i = 0; i < 8; i++)
+  {
+    calibBlack[i] = strtol(p1, (char**)&p1,10);
+    if (calibWhite[i] - calibBlack[i] < 10)
+      calibrationValid = false;
+  }
+  if (not calibrationValid)
+  {
+    printf("# ****** MEdge::findEdge: invalid line sensor calibration values.\n");
+    for (int i = 0; i < 8; i++)
+    {
+      calibWhite[i] = 1000;
+      calibBlack[i] = 10;
+    }
+  }
+  // convert per-cent to per-mille
+  whiteThresholdPm = strtol(ini["edge"]["whiteThresholdPct"].c_str(), nullptr, 10) * 10;
+  crossingLevelPm  = strtol(ini["edge"]["crossingLevelPct"].c_str(), nullptr, 10) * 10;
+  sensorWidth = strtod(ini["edge"]["sensorWidth"].c_str(), nullptr);
+  //
+  // initiate data log for this module
+  toConsole = ini["edge"]["print"] == "true";
+  if (ini["edge"]["log"] == "true")
+  { // open logfile
+    std::string fn = service.logPath + "log_edge.txt";
+    logfile = fopen(fn.c_str(), "w");
+    fprintf(logfile, "%% Edge sensor logfile %s\n", fn.c_str());
+    // save calibration values as text
+    fprintf(logfile, "%% \tCalib white");
+    for (int i = 0; i < 8; i++)
+      fprintf(logfile, " %d", calibWhite[i]);
+    fprintf(logfile, "\n");
+    //
+    fprintf(logfile, "%% \tCalib black");
+    for (int i = 0; i < 8; i++)
+      fprintf(logfile, " %d", calibBlack[i]);
+    fprintf(logfile, "\n");
+    //
+    fprintf(logfile, "%% \tWhite threshold (%%of span) %d %%\n", whiteThresholdPm);
+    fprintf(logfile, "%% \tCrossing level (%%of span) %d %%\n", crossingLevelPm);
+    // and extracted values
+    fprintf(logfile, "%% 1 \tTime (sec)\n");
+    fprintf(logfile, "%% 2 \tEdge valid\n");
+    fprintf(logfile, "%% 3 \tLeft edge position(m)\n");
+    fprintf(logfile, "%% 4 \tRight edge position (m)\n");
+    fprintf(logfile, "%% 5 \tCrossing valid\n");
+    fprintf(logfile, "%% 6 \tCrossing average\n");
+  }
+  th1 = new std::thread(runObj, this);
+}
+
+
+void MEdge::terminate()
+{ // wait for thread to finish
+  if (th1 != nullptr)
+    th1->join();
+}
+
+void MEdge::findEdge()
+{
+  if (not calibrationValid)
+  { // invalid calibration values
+    leftEdge = 0.0;
+    rightEdge = 0.0;
+    crossingValid = 0;
+    edgeValid = 0;
+    return;
+  }
+  int vsum = 0;
+  bool lineValid = false;
+  //
+  // normalize to per-mille
+  // make calibrated values and scale to 1000
+  for (int i = 0; i < 8; i++)
+  {
+    int v = sedge.edgeRaw[i] - calibBlack[i];
+    v = (v * 1000) / (calibWhite[i] - calibBlack[i]);
+    if (v > 1000)
+      v = 1000;
+    else if (v < 0)
+      v = 0;
+    ls[i] = v;
+    vsum += v;
+    // line valid detect
+    if (v > whiteThresholdPm)
+      lineValid = true;
+  }
+  //
+  // crossing detect
+  crossingAverage = vsum/8;
+  crossingValid = crossingAverage > crossingLevelPm;
+  edgeValid = lineValid;
+  //
+  // edge position
+  if (lineValid and not crossingValid)
+  { // calculate edge position
+    int l, r;
+    //
+    // left edge
+    if (ls[0] > whiteThresholdPm)
+      leftEdge = 0;
+    else
+    {
+      for (l = 0; l < 7; l++)
+      {
+        if (ls[l+1] > whiteThresholdPm)
+          break;
+      }
+      // distance to threshold
+      int ee = whiteThresholdPm - ls[l];
+      // change from sensor l to l+1
+      int dd = ls[l+1] - ls[l];
+      if (dd > 0)
+        leftEdge = l + float(ee)/float(dd);
+      // debug
+      // printf(" findEdge:: left: l=%d, ee=%d, dd=%d, leftEdge=%g\n", l, ee, dd, leftEdge);
+      // debug end
+    }
+    //
+    // right edge
+    if (ls[7] > whiteThresholdPm)
+      rightEdge = 7;
+    else
+    {
+      for (r = 7; r > 0; r--)
+      {
+        if (ls[r-1] > whiteThresholdPm)
+          break;
+      }
+      // distance to threshold
+      int ee = whiteThresholdPm - ls[r];
+      // change from sensor r to r-1
+      int dd = ls[r-1] - ls[r];
+      if (dd > 0)
+        rightEdge = r - float(ee)/float(dd);
+      // debug
+      // printf(" findEdge::right: r=%d, ee=%d, dd=%d,rightEdge=%g\n", r, ee, dd, rightEdge);
+      // debug end
+    }
+  }
+  else
+  { // met a crossing line, assume full sensor width
+    leftEdge = 0;
+    rightEdge = 7;
+  }
+  //
+  // scale to meters
+  leftEdge = (leftEdge * sensorWidth / 8.0 ) - sensorWidth/2.0;
+  rightEdge = (rightEdge * sensorWidth / 8.0 ) - sensorWidth/2.0;
+  //
+  // finished - log/print as needed
+  toLog();
+}
+
+void MEdge::run()
+{
+  int loop = 0;
+  while (not service.stop)
+  {
+    if (sedge.updateCnt != lineUpdateCnt)
+    {
+      updTime = sedge.updTime;
+      lineUpdateCnt = sedge.updateCnt;
+      // calculate edge position
+      findEdge();
+      // inform users of update
+      updateCnt++;
+      loop++;
+    }
+    else
+      // just wait a bit (1ms)
+      usleep(1000);
+  }
+  if (logfile != nullptr)
+  {
+    fclose(logfile);
+  }
+}
+
+
+void MEdge::toLog()
+{
+  if (not not service.stop)
+  {
+    if (logfile != nullptr)
+    { // log_pose
+      fprintf(logfile, "%lu.%04ld %d %.3f %.3f %d %d\n", updTime.getSec(), updTime.getMicrosec()/100,
+              edgeValid, leftEdge, rightEdge, crossingValid, crossingAverage);
+    }
+    if (toConsole)
+    { // debug print to console
+      printf("%lu.%04ld %d %.3f %.3f %d %d\n", updTime.getSec(), updTime.getMicrosec()/100,
+              edgeValid, leftEdge, rightEdge, crossingValid, crossingAverage);
+    }
+  }
+}

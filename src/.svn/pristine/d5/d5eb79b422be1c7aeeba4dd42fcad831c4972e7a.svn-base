@@ -1,0 +1,17 @@
+#!/bin/bash
+# start roscore and bridge
+# this script is added as a root cronjob
+# to see and edit the job
+# $ crontab -e
+#
+cd /home/local/
+date >> rebootinfo.txt
+/usr/bin/roscore &
+# wait for ROSCORE to start
+sleep 1
+#start the bridge
+./bridge  &
+echo "Bridge started with PID:" >> rebootinfo.txt
+pgrep -l bridge >> rebootinfo.txt
+exit 0
+

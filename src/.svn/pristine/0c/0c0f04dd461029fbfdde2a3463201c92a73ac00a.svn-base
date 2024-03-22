@@ -1,0 +1,104 @@
+close all
+clear
+%% Robobot line sensor plot
+
+basedir = 'data/build/';
+%path = 'log_20231219_174652.915/';
+%path = 'log_20231221_145429.991/';
+%path = 'log_20231221_150158.856/';
+%path = 'log_20231221_150959.079/';
+%path = 'log_20231221_152125.386/';
+%path = 'log_20231221_160451.621/';
+%path = 'log_20231221_161001.464/'; 
+%path = 'log_20231221_173057.753/';
+path = 'log_20231223_085110.599/';
+
+%basedir = 'saved/';
+%path = 'log_20231221_160451.621/'; % passing at angle
+%path = 'log_20231221_161001.464/'; % follow with crossing right
+
+
+ddn = load(strcat(basedir,path,'log_edge_normalized.txt'));
+% Edge sensor logfile log_edge.txt
+% 	Calib white 406 526 596 577 596 533 505 436
+% 	Calib black 128 177 188 171 166 150 145 130
+% 	White threshold (%of span) 750 %
+% 	Crossing level (%of span) 800 %
+% 1 	Time (sec)
+% 2 	Edge valid
+% 3 	Left edge position(m)
+% 4 	Right edge position (m)
+% 5 	Crossing valid
+% 6 	Crossing average
+ddl = load(strcat(basedir,path,'log_edge.txt'));
+% Linesensor raw values logfile (reflectance values)
+% Sensor power high=1
+% 1 	Time (sec)
+% 2..9 	Sensor 1..8 AD value difference (illuminated - not illuminated)
+ddr = load(strcat(basedir,path,'log_edge_raw.txt'));
+% Edge logfile: log_edge_ctrl.txt
+% 1 	Time (sec)
+% 2 	Enabled
+% 3 	Edge 1=left, 0=right
+% 4 	Edge offset (signed in m; should be less than about 0.01)
+% 5 	control value (rad/sec)
+% 6 	limited
+ddc = load(strcat(basedir,path,'log_edge_ctrl.txt'));
+
+%%
+series = 30;
+fig = 1000 * series + 100000;
+
+%% edge
+figure(fig + 0)
+hold off
+plot(ddl(:,1) - ddl(1,1), ddl(:,2))
+hold on
+plot(ddl(:,1) - ddl(1,1), ddl(:,3)*100)
+plot(ddl(:,1) - ddl(1,1), ddl(:,4)*100)
+plot(ddl(:,1) - ddl(1,1), ddl(:,5)*0.95)
+plot(ddl(:,1) - ddl(1,1), ddl(:,6)/100)
+legend('valid', 'left (cm)', 'right (cm)','crossing', 'x-ing value/100');
+grid on
+xlabel('(sec)')
+title('Crossing to the right')
+%% values normalized
+figure(fig + 2)
+hold off
+plot(ddl(:,1) - ddl(1,1), ddl(:,2)/10)
+hold on
+plot(ddn(:,1) - ddl(1,1), ddn(:,2))
+plot(ddn(:,1) - ddl(1,1), ddn(:,3))
+plot(ddn(:,1) - ddl(1,1), ddn(:,4))
+plot(ddn(:,1) - ddl(1,1), ddn(:,5))
+plot(ddn(:,1) - ddl(1,1), ddn(:,6))
+plot(ddn(:,1) - ddl(1,1), ddn(:,7))
+plot(ddn(:,1) - ddl(1,1), ddn(:,8))
+legend('valid', 'ls1', 'ls2', 'ls3', 'ls4', 'ls5', 'ls6', 'ls7', 'ls8');
+grid on
+xlabel('(sec)')
+title('normalized')
+
+%% values raw
+figure(fig + 5)
+hold off
+plot(ddl(:,1) - ddl(1,1), ddl(:,2)/10)
+hold on
+plot(ddr(:,1) - ddl(1,1), ddr(:,2))
+plot(ddr(:,1) - ddl(1,1), ddr(:,3))
+plot(ddr(:,1) - ddl(1,1), ddr(:,4))
+plot(ddr(:,1) - ddl(1,1), ddr(:,5))
+plot(ddr(:,1) - ddl(1,1), ddr(:,6))
+plot(ddr(:,1) - ddl(1,1), ddr(:,7))
+plot(ddr(:,1) - ddl(1,1), ddr(:,8))
+legend('valid', 'ls1', 'ls2', 'ls3', 'ls4', 'ls5', 'ls6', 'ls7', 'ls8');
+grid on
+xlabel('(sec)')
+title('raw')
+
+%% calibrate - interval must be adjusted
+
+white = mean(ddr(200:220,2:9))
+black = mean(ddr(1:50,2:9))
+
+

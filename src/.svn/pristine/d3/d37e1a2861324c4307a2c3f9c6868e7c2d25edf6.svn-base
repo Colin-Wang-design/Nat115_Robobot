@@ -1,0 +1,119 @@
+ #/***************************************************************************
+ #*   Copyright (C) 2023 by DTU
+ #*   jca@elektro.dtu.dk
+ #*
+ #*
+ #* The MIT License (MIT)  https://mit-license.org/
+ #*
+ #* Permission is hereby granted, free of charge, to any person obtaining a copy of this software
+ #* and associated documentation files (the “Software”), to deal in the Software without restriction,
+ #* including without limitation the rights to use, copy, modify, merge, publish, distribute,
+ #* sublicense, and/or sell copies of the Software, and to permit persons to whom the Software
+ #* is furnished to do so, subject to the following conditions:
+ #*
+ #* The above copyright notice and this permission notice shall be included in all copies
+ #* or substantial portions of the Software.
+ #*
+ #* THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+ #* INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR
+ #* PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE
+ #* FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ #* ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ #* THE SOFTWARE. */
+
+import sys
+import socket
+import threading
+import math
+from datetime import datetime
+import time
+import copy
+
+# forward declaration
+#class UTime:
+    #def __init__(self):
+        #self.sec = 0
+        #self.usec = 0
+
+class UState:
+
+    def __init__(self):
+        # Battery voltage with a few decimals (~2 valid decimals)
+        self.batteryVoltage = 0.0
+        # Teensy time since start of Teensy
+        self.teensyOpenTime = datetime.now()
+        self.teensyTimeAtOpen = 0.0
+        self.teensyTime = 0.0
+        self.justOpened = True
+        # robot hardware index number (serial)
+        self.idx = 0
+        # robot hardware version
+        self.version = 0
+        # control state
+        self.controlState = 0
+        # robot hardware type
+        self.type = 0
+        # system time at this Teensy time
+        self.hbtTime = []
+        # mutex should be used to get consistent values
+        self.dataLock = threading.Lock()
+        # logfile
+        self.logfile = None
+
+    def setup(self):
+        # setup code goes here
+        from uteensy import teensy
+        teensy.send("sub hbt 500\n");
+        if True:
+          # open logfile
+          self.logfile = open("log_hbt.txt", "w");
+          self.logfile.write("%% Heartbeat logfile\n")
+          self.logfile.write("%% 1 \tTime (sec)\n")
+          self.logfile.write("%% 2 \tRobot name index\n");
+          self.logfile.write("%% 3 \tVersion\n");
+          self.logfile.write("%% 4 \tState\n");
+          self.logfile.write("%% 5 \tBattery voltage (V)\n");
+        pass
+
+    def decode(self, msg, msgTime):
+        used = True
+        got = msg.split()
+        print("# State got " + str(got) + " got[0]=" + got[0])
+        if got[0] == "hbt":
+          # decode HBT
+          # get data
+          self.dataLock.acquire()
+          # time in seconds from Teensy
+          tt = float(got[1]);
+          dtt = tt - self.teensyTime;
+          self.teensyTime = tt
+          self.idx = int(got[2]) #strtol(p1, (char**)&p1, 10); // index (serial)
+          self.version = int(got[3]) # strtol(p1, (char**)&p1, 10); // index (serial)
+          self.batteryVoltage = float(got[4]) #strtof(p1, (char**)&p1); // y
+          self.controlState = int(got[5]) #strtol(p1, (char**)&p1, 10); // control state 0=no control, 2=user mission
+          self.type = int(got[6]) # strtol(p1, (char**)&p1, 10); // hardware type
+          #double dtm = msgTime - hbtTime;
+          self.hbtTime = copy.copy(msgTime)
+          # save to log if file is open
+          if self.logfile != None:
+            self.logfile.write("{:.3f} {:d} {:d} {:d} {:.2f}\n".format(self.teensyTime,
+                    self.idx, self.version, self.controlState, self.batteryVoltage))
+          self.dataLock.release()
+          #
+        else:
+          used = False
+        return used
+
+    def terminate(self):
+        # termination code goes here
+        if self.logfile != None:
+          self.dataLock.acquire()
+          self.logfile.close()
+          self.logfile = None;
+          print("# logfile closed - UState\n")
+          self.dataLock.release()
+        print("# UState terminated")
+        pass
+
+# Make this visible to the rest of the software
+state = UState()

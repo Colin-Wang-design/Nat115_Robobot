@@ -1,0 +1,87 @@
+
+import argparse
+from argparse import HelpFormatter
+from functools import partial
+import time
+from uteensy import teensy
+from ustate import state
+
+import signal
+import sys
+
+def signal_handler(sig, frame):
+    print('UService:: You pressed Ctrl+C!')
+    service.shutdown()
+    sys.exit(0)
+
+
+class CustomHelpFormatter(HelpFormatter):
+
+    def _format_action_invocation(self, action):
+        if not action.option_strings:
+            # Use default methods for positional arguments
+            default = self._get_default_metavar_for_positional(action)
+            metavar, = self._metavar_formatter(action, default)(1)
+            return metavar
+
+        else:
+            parts = []
+            if action.nargs == 0:
+                # Just add options, if they expects no values (like --help)
+                parts.extend(action.option_strings)
+            else:
+                default = self._get_default_metavar_for_optional(action)
+                args_string = self._format_args(action, default)
+                for option_string in action.option_strings:
+                    parts.append(option_string)
+                # Join the argument names (like -p --param ) and add the metavar at the end
+                return '%s %s' % (', '.join(parts), args_string)
+
+            return ', '.join(parts)
+
+
+class UService:
+    args = []
+    usbDev = '/dev/ttyACM0'
+    def setup(self):
+        parser = argparse.ArgumentParser(description='ROBOBOT handling app', formatter_class=CustomHelpFormatter)
+        parser.add_argument('-v', '--version', action='version', version='raubase 1.0')
+        parser.add_argument('-d', '--device', metavar='<device>', help='Teensy device name')
+        parser.add_argument('-e', '--extra', action='store_true', help='This Value is False by default')
+        self.args = parser.parse_args()
+        # allow close down on ctrl-C
+        signal.signal(signal.SIGINT, signal_handler)
+        #
+        isHelp = True
+        #
+        if self.args.device and self.args.extra:
+            print('Option ignored as extra ' + self.args.device + '!')
+        elif self.args.extra:
+            print('Hello There!')
+            isHelp = False
+        elif self.args.device:
+            print('Teensy device ' + self.args.device)
+            self.usbDev = self.args.device
+            isHelp = False
+        else:
+            print('Using default teensy device ' + self.usbDev)
+            isHelp = False
+        # setting up the rest
+        if not isHelp:
+            teensy.setup(self.usbDev)
+            time.sleep(0.3)
+            state.setup();
+
+        return isHelp
+
+    def decode(self, msg, msgTime):
+        used = state.decode(msg, msgTime)
+        if not used:
+            print("# Service:: message not used " + msg)
+
+    def shutdown(self):
+        state.terminate()
+        teensy.terminate()
+
+# create the service object
+service = UService()

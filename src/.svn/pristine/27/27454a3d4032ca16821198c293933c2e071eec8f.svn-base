@@ -1,0 +1,75 @@
+% plot of x-section for fejemis
+close all
+clear
+%%  1    time 0.000 sec, from Sofia (2)
+%  2  3  4  5   (mission 0), state 2, entered (thread 3, line 0), events 0x0 (bit-flags)
+%  6  7 Motor velocity ref left, right: 0.2000 0.2000
+%  8  9 Motor voltage [V] left, right: 2.22 2.22
+% 10 11 Motor current left, right [A]: -0.000 0.000
+% 12 13 Wheel velocity [m/s] left, right: -0.0000 0.0000
+% 14    Battery voltage [V]
+data00=load('log_mrvawb_00.txt');
+data01=load('log_mrvawb_01.txt');
+data02=load('log_mrvawb_02.txt');
+data03=load('log_mrvawb_03.txt');
+data04=load('log_mrvawb_04.txt');
+data05=load('log_mrvawb_05.txt');
+data06=load('log_mrvawb_06.txt');
+data07=load('log_mrvawb_07.txt');
+data08=load('log_mrvawb_08.txt');
+data09=load('log_mrvawb_09.txt');
+data10=load('log_mrvawb_10.txt');
+data11=load('log_mrvawb_11.txt');
+data12=load('log_mrvawb_12.txt');
+data13=load('log_mrvawb_13.txt');
+data14=load('log_mrvawb_14.txt');
+data15=load('log_mrvawb_15.txt');
+data16=load('log_mrvawb_16.txt');
+data17=load('log_mrvawb_17.txt');
+data18=load('log_mrvawb_18.txt');
+data19=load('log_mrvawb_19.txt');
+data20=load('log_mrvawb_20.txt');
+data21=load('log_mrvawb_21.txt');
+data22=load('log_mrvawb_22.txt');
+data23=load('log_mrvawb_23.txt');
+data24=load('log_mrvawb_24.txt');
+data25=load('log_mrvawb_25.txt');
+data26=load('log_mrvawb_26.txt');
+data27=load('log_mrvawb_27.txt');
+data28=load('log_mrvawb_28.txt');
+data29=load('log_mrvawb_29.txt');
+data30=load('log_mrvawb_30.txt');
+data31=load('log_mrvawb_31.txt');
+%% jjjj
+dd = data31;
+fig = 31;
+%%
+figure(1000+fig)
+hold off
+plot(dd(:,1), dd(:,4))
+hold on
+plot(dd(:,1), dd(:,10))
+plot(dd(:,1), -dd(:,11))
+plot(dd(:,1), -dd(:,12))
+plot(dd(:,1), -dd(:,13))
+legend('mission','left A','right A','left vel', 'right vel')
+title('motor current')
+grid on
+%%
+figure(1001+fig)
+hold off
+plot(dd(:,1), dd(:,9))
+hold on
+plot(dd(:,1), dd(:,10))
+plot(dd(:,1), dd(:,11))
+legend('x','y','z')
+title('square gyro')
+grid on
+%%
+figure(1002+fig)
+hold off
+plot(dd(:,20), dd(:,21))
+axis equal
+legend('pose')
+title('square pose')
+grid on

@@ -1,0 +1,335 @@
+/*  
+ * 
+ * Copyright © 2024 DTU,
+ * Author:
+ * Christian Andersen jcan@dtu.dk
+ * 
+ * The MIT License (MIT)  https://mit-license.org/
+ * 
+ * Permission is hereby granted, free of charge, to any person obtaining a copy of this software
+ * and associated documentation files (the “Software”), to deal in the Software without restriction, 
+ * including without limitation the rights to use, copy, modify, merge, publish, distribute, 
+ * sublicense, and/or sell copies of the Software, and to permit persons to whom the Software 
+ * is furnished to do so, subject to the following conditions:
+ * 
+ * The above copyright notice and this permission notice shall be included in all copies 
+ * or substantial portions of the Software.
+ * 
+ * THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, 
+ * INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR 
+ * PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE 
+ * FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, 
+ * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN 
+ * THE SOFTWARE. */
+
+#include <string>
+#include <string.h>
+#include <sys/types.h>
+#include <filesystem>
+#include <opencv2/calib3d/calib3d.hpp>
+#include <opencv2/imgproc/imgproc.hpp>
+#include <stdio.h>
+#include <iostream>
+
+#include "ucam.h"
+#include "uservice.h"
+
+// create connection object
+UCam cam;
+namespace fs = std::filesystem;
+
+void UCam::setup()
+{ // ensure default values
+  if (not ini.has("camera"))
+  { // no data yet, so generate some default values
+    ini["camera"]["device"] = "0";
+    ini["camera"]["width"] = "1280";
+    ini["camera"]["height"] = "720";
+    ini["camera"]["fps"] = "25";
+    ini["camera"]["imagepath"] = "img";
+    ini["camera"]["imageName"] = "%d"; // %d means date and time
+    ini["camera"]["log"] = "true";
+    ini["camera"]["print"] = "false";
+    ini["camera"]["enabled"] = "false";
+  }
+  if (ini["camera"]["enabled"] == "true")
+  { // create directory for images
+    printf("# UCam:: Vision link: trying to create %s\n", ini["camera"]["imagepath"].c_str());
+    fs::create_directory(ini["camera"]["imagepath"]);
+    //
+    // create log file
+    toConsole = ini["camera"]["print"] == "true";
+    int device = strtol(ini["camera"]["device"].c_str(), nullptr, 10);
+    //
+    if (ini["camera"]["log"] == "true")
+    { // open logfile
+      std::string fn = service.logPath + "log_pyvision.txt";
+      logfile = fopen(fn.c_str(), "w");
+      fprintf(logfile, "%% Camera (not vision) - logfile\n");
+      fprintf(logfile, "%% connection to camera %d\n", device);
+      fprintf(logfile, "%% Image path %s\n", ini["camera"]["imagepath"].c_str());
+      fprintf(logfile, "%% 1 \tTime (sec)\n");
+      fprintf(logfile, "%% 2,3 \trows, columns\n");
+      fprintf(logfile, "%% 4 \tImage number used\n");
+      fprintf(logfile, "%% 5 \tCamera frame number\n");
+      fprintf(logfile, "%% 6 \tFilename\n");
+    }
+
+    // prepare to open camera
+    int apiID = cv::CAP_V4L2;  //cv::CAP_ANY;  // 0 = autodetect default API
+    // open selected camera using selected API
+    //   cap.set(cv::CAP_PROP_FRAME_WIDTH, 1280);
+    cam.open(device, apiID);
+    // check if we succeeded
+    //
+    if (not cam.isOpened())
+    {
+      printf("# UCam - camera could not open\n");
+    }
+    else
+    {
+      uint32_t fourcc = cv::VideoWriter::fourcc('M','J','P','G');
+      cam.set(cv::CAP_PROP_FOURCC, fourcc);
+      // possible resolutions in JPEG coding
+      // (rows x columns) 320x640 or 720x1280
+      int w = strtol(ini["camera"]["width"].c_str(), nullptr, 0);
+      int h = strtol(ini["camera"]["height"].c_str(), nullptr, 0);
+      cam.set(cv::CAP_PROP_FRAME_HEIGHT, h);
+      cam.set(cv::CAP_PROP_FRAME_WIDTH, w);
+      int fps = strtol(ini["camera"]["fps"].c_str(), nullptr, 0);
+      cam.set(cv::CAP_PROP_FPS, fps);
+      union FourChar
+      {
+        uint32_t cc4;
+        char ccc[4];
+      } fmt;
+      fmt.cc4 = cam.get(cv::CAP_PROP_FOURCC);
+      printf("# Video device %d: width=%g, height=%g, format=%c%c%c%c, FPS=%g\n",
+             device,
+             cam.get(cv::CAP_PROP_FRAME_WIDTH),
+             cam.get(cv::CAP_PROP_FRAME_HEIGHT),
+             fmt.ccc[0], fmt.ccc[1], fmt.ccc[2], fmt.ccc[3],
+             cam.get(cv::CAP_PROP_FPS));
+    }
+    if (cam.isOpened())
+      // start capturing images
+      th1 = new std::thread(runObj, this);
+  }
+  else
+    printf("# UCam:: disabled in robot.ini\n");
+}
+
+void UCam::terminate()
+{ // wait for receive thread to finish
+  if (th1 != nullptr)
+  {
+    th1->join();
+  }
+  // close logfile
+  if (logfile != nullptr)
+  {
+    fclose(logfile);
+    printf("# UCam:: logfile closed\n");
+  }
+}
+
+
+void UCam::run()
+{
+  printf("# Camera is running (to stabilize illumination)\n");
+
+  while (not service.stop and not stopCam)
+  { // wait for reply
+    if (getNewFrame and not gotFrame and frameCnt > 10)
+    {
+      printf("# reading frame %d/%d\n", gotFrameCnt, frameCnt);
+      cam.read(frame);
+      if (frame.empty())
+        printf("# frame is empty\n");
+      else
+      {
+        printf("# frame is good\n");
+        gotFrameCnt++;
+        imgTime.now();
+        getNewFrame = false;
+        gotFrame = true;
+      }
+    }
+    else
+    { // just mark as used
+      cam.grab();
+    }
+    frameCnt++;
+//    if (frameCnt % 100 == 3)
+//      printf("# cam got frame %d/%d\n", gotFrameCnt, frameCnt);
+  }
+  th1 = nullptr;
+  cam.release();
+  printf("# UCam::run: camera released\n");
+}
+
+
+cv::Mat UCam::getFrame()
+{ // request new frame
+  printf("Asking for a frame\n");
+  getNewFrame = true;
+  // allow timeout, 1 second from now
+  UTime t;
+  t.now();
+  while (not gotFrame and t.getTimePassed() < 5.0)
+  { // wait for frame (or timeout of 1 second)
+    usleep(3000);
+  }
+  if (gotFrame)
+    printf("# Got an image frame\n");
+  else
+    printf("# failed to get an image frame\n");
+  // mark finished with frame
+  gotFrame = false;
+  return frame;
+}
+
+
+bool UCam::saveImage()
+{
+  cv::Mat rgb = getFrame();
+  if (not rgb.empty())
+  {
+    printf("# ready to save\n");
+    const int MSL = 500;
+    char sfn[MSL];
+    const char * sfn_ptr = sfn;
+    char s[MSL];
+    auto p = ini["camera"]["imageName"].find('%');
+    if (p != std::string::npos)
+    { // make timestamped image filename
+      imgTime.getForFilename(sfn);
+      printf("# found '%%' in ini[camera][imageName]\n");
+    }
+    else
+    { // use specified filename
+      printf("# no '%%' in ini[camera][imageName]\n");
+      sfn_ptr = ini["camera"]["imageName"].c_str();
+    }
+    // generate filename
+    snprintf(s, MSL, "%s/img_%s.jpg", ini["camera"]["imagepath"].c_str(), sfn_ptr);
+    // save
+    cv::imwrite(s, frame);
+    printf("# saved image to %s\n", s);
+  }
+  else
+  {
+    printf("UCam:: could not get a frame\n");
+  }
+}
+
+
+bool UCam::calibrate()
+{
+  printf("# ready to calibrate, stopping camera\n");
+  stopCam = true;
+  //
+  // Defining the dimensions of checkerboard
+  int CHECKERBOARD[2]{6,9};
+
+  // Creating vector to store vectors of 3D points for each checkerboard image
+  std::vector<std::vector<cv::Point3f> > objpoints;
+
+  // Creating vector to store vectors of 2D points for each checkerboard image
+  std::vector<std::vector<cv::Point2f> > imgpoints;
+
+  // Defining the world coordinates for 3D points
+  std::vector<cv::Point3f> objp;
+  for(int i{0}; i<CHECKERBOARD[1]; i++)
+  {
+    for(int j{0}; j<CHECKERBOARD[0]; j++)
+      objp.push_back(cv::Point3f(j,i,0));
+  }
+
+
+  // Extracting path of individual image stored in a given directory
+  std::vector<cv::String> images;
+  // Path of the folder containing checkerboard images
+  std::string path = "./img/*.jpg";
+
+  cv::glob(path, images);
+
+  cv::Mat frame, gray;
+  // vector to store the pixel coordinates of detected checker board corners
+  std::vector<cv::Point2f> corner_pts;
+  bool success;
+
+  // Looping over all the images in the directory
+  for(int i = 0; i < (int)images.size(); i++)
+  {
+    frame = cv::imread(images[i]);
+    cv::cvtColor(frame,gray,cv::COLOR_BGR2GRAY);
+
+    // Finding checker board corners
+    // If desired number of corners are found in the image then success = true
+    success = cv::findChessboardCorners(gray,cv::Size(CHECKERBOARD[0],CHECKERBOARD[1]), corner_pts, cv::CALIB_CB_ADAPTIVE_THRESH | cv::CALIB_CB_FAST_CHECK | cv::CALIB_CB_NORMALIZE_IMAGE);
+
+    /*
+      * If desired number of corner are detected,
+      * we refine the pixel coordinates and display
+      * them on the images of checker board
+      */
+    if(success)
+    {
+      cv::TermCriteria criteria(cv::TermCriteria::EPS | cv::TermCriteria::MAX_ITER, 30, 0.001);
+
+      // refining pixel coordinates for given 2d points.
+      cv::cornerSubPix(gray,corner_pts,cv::Size(11,11), cv::Size(-1,-1),criteria);
+
+      // Displaying the detected corner points on the checker board
+      cv::drawChessboardCorners(frame, cv::Size(CHECKERBOARD[0],CHECKERBOARD[1]), corner_pts,success);
+
+      objpoints.push_back(objp);
+      imgpoints.push_back(corner_pts);
+      printf("#  succes    %s\n", images[i].c_str());
+    }
+    else
+      printf("# no corners %s\n", images[i].c_str());
+
+    cv::imshow("Image",frame);
+    cv::waitKey(0);
+  }
+
+  cv::destroyAllWindows();
+
+  cv::Mat cameraMatrix,distCoeffs,R,T;
+
+  /*
+    * Performing camera calibration by
+    * passing the value of known 3D points (objpoints)
+    * and corresponding pixel coordinates of the
+    * detected corners (imgpoints)
+    */
+  cv::calibrateCamera(objpoints, imgpoints,cv::Size(gray.rows,gray.cols),cameraMatrix,distCoeffs,R,T);
+
+  std::cout << "cameraMatrix : " << cameraMatrix << std::endl;
+  std::cout << "distCoeffs : " << distCoeffs << std::endl;
+  std::cout << "Rotation vector : " << R << std::endl;
+  std::cout << "Translation vector : " << T << std::endl;
+
+  return 0;
+}
+
+
+void UCam::toLog()
+{
+  if (service.stop)
+    return;
+  UTime t("now");
+  if (logfile != nullptr)
+  {
+    fprintf(logfile, "%lu.%04lu cam\n",
+            t.getSec(), t.getMicrosec()/100);
+  }
+  if (toConsole)
+  {
+    printf("%lu.%04lu cam\n",
+            t.getSec(), t.getMicrosec()/100);
+  }
+}
+
